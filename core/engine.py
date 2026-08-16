@@ -109,12 +109,12 @@ class TradingEngine:
         for s in self.strategies:
             await s.on_start()
 
-        # Real-time market data feed (websocket preferred, REST fallback)
+        # Market data feed – REST polling is currently more reliable with binanceusdm
         self.feed = MarketDataFeed(
             exchange_adapter=self.exchange,
             symbols=self.settings.symbols[:5],
             timeframes=["15m", "1h"],
-            use_websocket=True,
+            use_websocket=False,
         )
         self.feed.on_event(self._on_market_event)
         await self.feed.start()
