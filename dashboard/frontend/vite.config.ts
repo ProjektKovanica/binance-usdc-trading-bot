@@ -6,6 +6,12 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
+    allowedHosts: [
+      "trader.kovanica.online",
+      "kovanica.online",
+      "localhost",
+      ".kovanica.online",
+    ],
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8000",

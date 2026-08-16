@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse, HTMLResponse
 from pydantic import BaseModel
@@ -172,6 +173,17 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Dashboard backend started")
+    try:
+        init_db()
+        try:
+            from dashboard.backend.auth.live_keys import init_live_tables
+            init_live_tables()
+            print("Live keys + jobs tables ready")
+        except Exception as e:
+            print(f"Live tables: {e}")
+        print("Auth DB ready")
+    except Exception as e:
+        print(f"Auth DB init error: {e}")
     _write_control(
         kill_switch=app_state["risk"].get("kill_switch", False),
         kill_reason=app_state["risk"].get("kill_reason", ""),
@@ -182,6 +194,62 @@ async def lifespan(app: FastAPI):
     )
     yield
     print("Dashboard backend stopped")
+
+
+
+# ─── Auth (Phase B) ───────────────────────────────────────────────
+security = HTTPBearer(auto_error=False)
+
+try:
+    from dashboard.backend.auth.users import (
+    init_db, create_user, authenticate_user, get_user_by_id,
+    get_paper_state, update_paper_risk, set_kill_switch as db_set_kill, reset_paper_account,
+)
+    from dashboard.backend.auth.jwt_utils import create_access_token, decode_token
+except ImportError:
+    from auth.users import (
+    init_db, create_user, authenticate_user, get_user_by_id,
+    get_paper_state, update_paper_risk, set_kill_switch as db_set_kill, reset_paper_account,
+)
+    from auth.jwt_utils import create_access_token, decode_token
+
+
+class RegisterBody(BaseModel):
+    email: str
+    password: str
+
+
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
+def _user_from_creds(creds: Optional[HTTPAuthorizationCredentials]):
+    if not creds or not creds.credentials:
+        return None
+    payload = decode_token(creds.credentials)
+    if not payload:
+        return None
+    try:
+        uid = int(payload.get("sub", 0))
+    except Exception:
+        return None
+    return get_user_by_id(uid)
+
+
+async def require_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    user = _user_from_creds(creds)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+async def optional_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    return _user_from_creds(creds)
 
 
 app = FastAPI(
@@ -243,6 +311,223 @@ async def root():
     """
 
 
+
+@app.post("/api/auth/register")
+async def auth_register(body: RegisterBody):
+    try:
+        user = create_user(body.email, body.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    token = create_access_token(user["id"], user["email"])
+    return {"ok": True, "access_token": token, "token_type": "bearer", "user": user}
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: LoginBody):
+    user = authenticate_user(body.email, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_access_token(user["id"], user["email"])
+    return {"ok": True, "access_token": token, "token_type": "bearer", "user": user}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user=Depends(require_user)):
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/paper/reset")
+async def paper_reset(user=Depends(require_user)):
+    st = reset_paper_account(user["id"], 10000.0)
+    return {"ok": True, "state": st}
+
+
+
+# ─── Phase D: encrypted exchange keys + job queue ───────────────
+class KeysBody(BaseModel):
+    api_key: str
+    api_secret: str
+    exchange: str = "binance"
+    label: str = "default"
+
+
+@app.post("/api/keys")
+async def save_exchange_keys(body: KeysBody, user=Depends(require_user)):
+    try:
+        from dashboard.backend.auth.live_keys import save_keys, enqueue_job
+        out = save_keys(user["id"], body.api_key, body.api_secret, body.exchange, body.label)
+        enqueue_job(user["id"], "validate_keys", {"exchange": body.exchange})
+        return out
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/keys")
+async def get_exchange_keys(user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import list_keys
+    return {"keys": list_keys(user["id"])}
+
+
+@app.delete("/api/keys/{key_id}")
+async def remove_exchange_key(key_id: int, user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import delete_keys
+    ok = delete_keys(user["id"], key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"ok": True}
+
+
+@app.get("/api/jobs")
+async def get_jobs(user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import list_jobs
+    return {"jobs": list_jobs(user["id"])}
+
+
+@app.post("/api/jobs/start-live")
+async def job_start_live(user=Depends(require_user)):
+    """Queue a live-start job (skeleton — does not trade until worker enabled)."""
+    from dashboard.backend.auth.live_keys import enqueue_job, get_user_billing, list_keys
+    billing = get_user_billing(user["id"])
+    if (billing.get("plan") or "free") == "free":
+        raise HTTPException(status_code=402, detail="Live requires Pro plan (Phase E)")
+    if not list_keys(user["id"]):
+        raise HTTPException(status_code=400, detail="Add Binance API keys first")
+    jid = enqueue_job(user["id"], "start_live", {})
+    return {"ok": True, "job_id": jid, "note": "Queued — worker skeleton will not place orders yet"}
+
+
+# ─── Phase E: Stripe billing ────────────────────────────────────
+@app.get("/api/billing")
+async def billing_status(user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import get_user_billing
+    from dashboard.backend.billing.stripe_billing import stripe_configured
+    b = get_user_billing(user["id"])
+    b["stripe_configured"] = stripe_configured()
+    return b
+
+
+@app.post("/api/billing/checkout")
+async def billing_checkout(user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import get_user_billing
+    from dashboard.backend.billing.stripe_billing import create_checkout_session
+    b = get_user_billing(user["id"])
+    try:
+        return create_checkout_session(
+            customer_email=user["email"],
+            user_id=user["id"],
+            customer_id=b.get("stripe_customer_id"),
+        )
+    except Exception as e:
+        # Surface Stripe errors instead of generic 500
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(request: Request):
+    """Stripe webhook — raw body required for signature verification."""
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        from dashboard.backend.billing.stripe_billing import (
+            construct_webhook_event,
+            handle_webhook_event,
+            webhook_configured,
+        )
+        if not webhook_configured():
+            raise HTTPException(status_code=503, detail="STRIPE_WEBHOOK_SECRET not configured")
+        event = construct_webhook_event(payload, sig)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
+
+    # event may be Stripe Object — normalize to dict
+    if hasattr(event, "to_dict"):
+        event = event.to_dict()
+    result = handle_webhook_event(event)
+    return result
+
+
+@app.get("/api/billing/webhook-info")
+async def billing_webhook_info():
+    """Non-secret status for ops (does not expose keys)."""
+    from dashboard.backend.billing.stripe_billing import stripe_configured, webhook_configured, _cfg
+    c = _cfg()
+    return {
+        "stripe_configured": stripe_configured(),
+        "webhook_configured": webhook_configured(),
+        "webhook_url": f"{c['public_url'].rstrip('/')}/api/billing/webhook",
+        "has_secret_key": bool(c["secret"]),
+        "has_price_id": bool(c["price"]),
+        "has_webhook_secret": bool(c["webhook"]),
+        "secret_looks_valid": c["secret"].startswith("sk_"),
+        "price_looks_valid": c["price"].startswith("price_"),
+        "webhook_looks_valid": c["webhook"].startswith("whsec_"),
+        "events_needed": [
+            "checkout.session.completed",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+            "invoice.paid",
+            "invoice.payment_failed",
+        ],
+    }
+
+
+
+@app.post("/api/live/start")
+async def live_start(user=Depends(require_user)):
+    """Arm live for this user (pro + keys + server LIVE_TRADING_ENABLED)."""
+    import os
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path("/root/trading-bot/.env"), override=True)
+    except Exception:
+        pass
+    from dashboard.backend.auth.live_keys import (
+        get_user_billing, list_keys, enqueue_job, set_live_enabled,
+    )
+    b = get_user_billing(user["id"])
+    if (b.get("plan") or "free") != "pro":
+        raise HTTPException(status_code=402, detail="Pro plan required for live")
+    if not list_keys(user["id"]):
+        raise HTTPException(status_code=400, detail="Add Binance API keys first")
+    jid = enqueue_job(user["id"], "start_live", {})
+    return {"ok": True, "job_id": jid, "message": "Live start queued"}
+
+
+@app.post("/api/live/stop")
+async def live_stop(user=Depends(require_user)):
+    from dashboard.backend.auth.live_keys import enqueue_job, set_live_enabled
+    set_live_enabled(user["id"], False)
+    jid = enqueue_job(user["id"], "stop_live", {})
+    return {"ok": True, "job_id": jid}
+
+
+@app.get("/api/live/status")
+async def live_status(user=Depends(require_user)):
+    import os
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path("/root/trading-bot/.env"), override=True)
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+    except Exception:
+        pass
+    from dashboard.backend.auth.live_keys import get_user_billing, list_keys, list_jobs
+    b = get_user_billing(user["id"])
+    flag = (os.getenv("LIVE_TRADING_ENABLED") or "").strip().lower()
+    return {
+        "server_armed": flag in ("1", "true", "yes"),
+        "live_flag_raw": os.getenv("LIVE_TRADING_ENABLED"),
+        "plan": b.get("plan"),
+        "live_enabled": b.get("live_enabled"),
+        "has_keys": bool(list_keys(user["id"])),
+        "recent_jobs": list_jobs(user["id"], 5),
+    }
+
 @app.get("/api/health")
 async def health():
     return {
@@ -254,7 +539,25 @@ async def health():
 
 
 @app.get("/api/portfolio")
-async def get_portfolio():
+async def get_portfolio(user=Depends(optional_user)):
+    if user:
+        st = get_paper_state(user["id"])
+        return {
+            "equity": st["equity"],
+            "starting_equity": st["starting_equity"],
+            "daily_pnl": st["daily_pnl"],
+            "weekly_pnl": st["weekly_pnl"],
+            "unrealized_pnl": st["unrealized_pnl"],
+            "realized_pnl": st["realized_pnl"],
+            "available_balance": st["available_balance"],
+            "used_margin": st["used_margin"],
+            "mode": "paper",
+            "last_update": st["last_update"],
+            "risk": st["risk"],
+            "open_positions": st["open_positions"],
+            "open_orders": st["open_orders"],
+            "user": {"id": user["id"], "email": user["email"]},
+        }
     live = _read_status()
     if live:
         app_state["equity"] = live.get("equity", app_state["equity"])
@@ -311,8 +614,17 @@ class KillSwitchRequest(BaseModel):
 
 
 @app.post("/api/risk/kill-switch")
-async def set_kill_switch(body: KillSwitchRequest):
+async def set_kill_switch(body: KillSwitchRequest, user=Depends(optional_user)):
     reason = body.reason if body.active else ""
+    if user:
+        st = db_set_kill(user["id"], body.active, reason or ("Kill switch" if body.active else ""))
+        return {
+            "ok": True,
+            "kill_switch": body.active,
+            "reason": reason,
+            "user_id": user["id"],
+            "risk": st["risk"],
+        }
     if body.active and (not reason or reason.startswith("Manual") or reason.startswith("Activated")):
         reason = KILL_SWITCH_DESCRIPTION
     app_state["risk"]["kill_switch"] = body.active
@@ -343,8 +655,12 @@ class RiskUpdate(BaseModel):
 
 
 @app.patch("/api/risk")
-async def update_risk(body: RiskUpdate):
-    for k, v in body.model_dump(exclude_none=True).items():
+async def update_risk(body: RiskUpdate, user=Depends(optional_user)):
+    patch = body.model_dump(exclude_none=True)
+    if user:
+        st = update_paper_risk(user["id"], patch)
+        return {"ok": True, "risk": st["risk"], "user_id": user["id"]}
+    for k, v in patch.items():
         if k in app_state["risk"]:
             app_state["risk"][k] = v
     _write_control(

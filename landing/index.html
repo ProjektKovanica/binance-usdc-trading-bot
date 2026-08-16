@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kovanica Trader — Premium Algo Trading</title>
+  <meta name="description" content="Institutional-grade USDC algo trading. Paper & live. Binance futures. One dashboard." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #050505;
+      --bg-elevated: #0c0c0c;
+      --gold: #c9a227;
+      --gold-bright: #e8c547;
+      --gold-dim: #8a7020;
+      --gold-glow: rgba(201, 162, 39, 0.35);
+      --text: #f5f0e6;
+      --muted: #9a958a;
+      --line: rgba(201, 162, 39, 0.22);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: "Outfit", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    /* ambient gold dust */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(201, 162, 39, 0.12), transparent 55%),
+        radial-gradient(ellipse 40% 30% at 90% 60%, rgba(201, 162, 39, 0.05), transparent 50%),
+        radial-gradient(ellipse 30% 25% at 10% 80%, rgba(201, 162, 39, 0.04), transparent 50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    /* NAV */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.35rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .logo {
+      font-family: "Cormorant Garamond", serif;
+      font-size: 1.45rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--gold-bright);
+      text-decoration: none;
+    }
+
+    .logo span { color: var(--muted); font-weight: 400; letter-spacing: 0.08em; }
+
+    .nav-links {
+      display: flex;
+      gap: 1.75rem;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 400;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--gold-bright); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.85rem 1.75rem;
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: all 0.25s ease;
+    }
+
+    .btn-gold {
+      background: linear-gradient(135deg, #a88620 0%, #e8c547 45%, #c9a227 100%);
+      color: #0a0a0a;
+      box-shadow: 0 0 24px var(--gold-glow), inset 0 1px 0 rgba(255,255,255,0.25);
+    }
+
+    .btn-gold:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 36px rgba(201, 162, 39, 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--gold);
+      border: 1px solid var(--line);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--gold);
+      color: var(--gold-bright);
+      background: rgba(201, 162, 39, 0.06);
+    }
+
+    /* HERO */
+    header.hero {
+      padding: 5.5rem 0 4.5rem;
+      text-align: center;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      font-size: 0.72rem;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: var(--gold-dim);
+      border: 1px solid var(--line);
+      padding: 0.4rem 1rem;
+      margin-bottom: 1.75rem;
+    }
+
+    h1 {
+      font-family: "Cormorant Garamond", serif;
+      font-size: clamp(2.6rem, 7vw, 4.6rem);
+      font-weight: 600;
+      line-height: 1.08;
+      letter-spacing: 0.02em;
+      background: linear-gradient(180deg, #f0d978 0%, #c9a227 45%, #8a7020 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin-bottom: 1.25rem;
+    }
+
+    h1 em {
+      font-style: italic;
+      font-weight: 400;
+    }
+
+    .hero-sub {
+      max-width: 540px;
+      margin: 0 auto 2.25rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+      font-weight: 300;
+    }
+
+    .hero-cta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem;
+      justify-content: center;
+      margin-bottom: 3.5rem;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .stat {
+      background: var(--bg-elevated);
+      padding: 1.35rem 1rem;
+      text-align: center;
+    }
+
+    .stat strong {
+      display: block;
+      font-family: "Cormorant Garamond", serif;
+      font-size: 1.65rem;
+      color: var(--gold-bright);
+      font-weight: 600;
+    }
+
+    .stat span {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    /* SECTIONS */
+    section {
+      padding: 4.5rem 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section-label {
+      font-size: 0.7rem;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: var(--gold-dim);
+      margin-bottom: 0.75rem;
+    }
+
+    h2 {
+      font-family: "Cormorant Garamond", serif;
+      font-size: clamp(1.9rem, 4vw, 2.6rem);
+      font-weight: 600;
+      color: var(--gold-bright);
+      margin-bottom: 1rem;
+      letter-spacing: 0.03em;
+    }
+
+    .section-lead {
+      color: var(--muted);
+      max-width: 520px;
+      margin-bottom: 2.5rem;
+      font-weight: 300;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .card {
+      background: linear-gradient(160deg, rgba(201,162,39,0.06) 0%, transparent 40%), var(--bg-elevated);
+      border: 1px solid var(--line);
+      padding: 1.75rem 1.5rem;
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+
+    .card:hover {
+      border-color: rgba(201, 162, 39, 0.45);
+      box-shadow: 0 0 28px rgba(201, 162, 39, 0.08);
+    }
+
+    .card-icon {
+      font-size: 1.35rem;
+      margin-bottom: 0.85rem;
+      color: var(--gold);
+    }
+
+    .card h3 {
+      font-family: "Cormorant Garamond", serif;
+      font-size: 1.35rem;
+      color: var(--gold-bright);
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .card p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 300;
+    }
+
+    /* PRICING */
+    .pricing-card {
+      max-width: 420px;
+      margin: 0 auto;
+      border: 1px solid var(--gold-dim);
+      background: linear-gradient(180deg, rgba(201,162,39,0.1) 0%, var(--bg-elevated) 35%);
+      padding: 2.5rem 2rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .pricing-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--gold-bright), transparent);
+    }
+
+    .price {
+      font-family: "Cormorant Garamond", serif;
+      font-size: 3.2rem;
+      color: var(--gold-bright);
+      font-weight: 600;
+      margin: 0.5rem 0;
+    }
+
+    .price small {
+      font-size: 1rem;
+      color: var(--muted);
+      font-weight: 400;
+      letter-spacing: 0.05em;
+    }
+
+    .pricing-card ul {
+      list-style: none;
+      text-align: left;
+      margin: 1.75rem 0 2rem;
+    }
+
+    .pricing-card li {
+      padding: 0.55rem 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 300;
+    }
+
+    .pricing-card li::before {
+      content: "◆";
+      color: var(--gold);
+      font-size: 0.55rem;
+      margin-right: 0.65rem;
+      vertical-align: middle;
+    }
+
+    /* CTA band */
+    .cta-band {
+      text-align: center;
+      padding: 4rem 1.5rem;
+      border: 1px solid var(--line);
+      background: radial-gradient(ellipse at center, rgba(201,162,39,0.1), transparent 70%);
+    }
+
+    .cta-band h2 { margin-bottom: 0.75rem; }
+    .cta-band p { color: var(--muted); margin-bottom: 1.75rem; font-weight: 300; }
+
+    /* FOOTER */
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 2rem 0 2.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    footer a { color: var(--gold-dim); text-decoration: none; }
+    footer a:hover { color: var(--gold-bright); }
+
+    .divider {
+      width: 48px;
+      height: 1px;
+      background: var(--gold);
+      margin: 0 auto 1.5rem;
+      opacity: 0.6;
+    }
+
+    @media (max-width: 640px) {
+      .nav-links a:not(.btn) { display: none; }
+      .stats { grid-template-columns: 1fr; }
+      header.hero { padding: 3.5rem 0 3rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="logo" href="/">Kovanica <span>Trader</span></a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="https://trader.kovanica.online" class="btn btn-gold">Enter Dashboard</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div class="eyebrow">USDC · Binance Futures · Algo</div>
+      <h1>Trade with<br /><em>quiet precision</em></h1>
+      <p class="hero-sub">
+        Premium algorithmic execution for USDC markets.
+        Paper first. Live when you’re ready. One disciplined dashboard.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-gold" href="https://trader.kovanica.online">Launch Terminal</a>
+        <a class="btn btn-outline" href="#pricing">View Pro</a>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <strong>USDC</strong>
+          <span>Settled pairs only</span>
+        </div>
+        <div class="stat">
+          <strong>Paper</strong>
+          <span>10k simulated capital</span>
+        </div>
+        <div class="stat">
+          <strong>Pro</strong>
+          <span>from €10 / month</span>
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="section-label">Capability</div>
+      <h2>Built like infrastructure</h2>
+      <p class="section-lead">
+        Not a toy signal group. A full stack: strategy, risk, feed, alerts, billing.
+      </p>
+      <div class="grid-3">
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Rule-based agent</h3>
+          <p>Regime awareness, score filters, adaptive sizing — fewer empty trades, cleaner entries.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Risk that bites</h3>
+          <p>Kill switch, daily loss caps, leverage clamps, pause entries from dashboard or Telegram.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Live market feed</h3>
+          <p>WebSocket-first Binance USDM data with disciplined REST fallback — built to survive rate limits.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Paper → Live path</h3>
+          <p>Prove the system on paper. Unlock live keys and Pro when the edge is earned, not hoped for.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Telegram command</h3>
+          <p>Status, positions, kill, pause — inline controls for when you’re away from the desk.</p>
+        </article>
+        <article class="card">
+          <div class="card-icon">◈</div>
+          <h3>Encrypted keys</h3>
+          <p>Exchange credentials sealed at rest. Minimal data: email and password. Nothing extra.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <div class="section-label">Membership</div>
+      <h2>Pro access</h2>
+      <p class="section-lead">Start free on paper. Upgrade when you want live rails and priority controls.</p>
+      <div class="pricing-card">
+        <div class="section-label" style="margin-bottom:0.25rem">Kovanica Pro</div>
+        <div class="price">€10 <small>/ month</small></div>
+        <p style="color:var(--muted);font-size:0.9rem;font-weight:300">+ tax where applicable · cancel anytime</p>
+        <ul>
+          <li>Full dashboard & analytics</li>
+          <li>Paper trading included</li>
+          <li>Live path (your API keys)</li>
+          <li>Telegram alerts & controls</li>
+          <li>Risk & strategy controls</li>
+        </ul>
+        <a class="btn btn-gold" href="https://trader.kovanica.online" style="width:100%">Get Pro</a>
+      </div>
+    </section>
+
+    <section style="border-top:1px solid var(--line);padding-bottom:4rem">
+      <div class="cta-band">
+        <div class="divider"></div>
+        <h2>Ready when you are</h2>
+        <p>Register in seconds. No noise. Just the terminal.</p>
+        <a class="btn btn-gold" href="https://trader.kovanica.online">Enter Kovanica Trader</a>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        <a href="https://trader.kovanica.online">trader.kovanica.online</a>
+        · Algo trading involves risk. Past results do not guarantee future performance.
+      </p>
+      <p style="margin-top:0.5rem;opacity:0.7">© 2026 Kovanica</p>
+    </footer>
+  </div>
+</body>
+</html>

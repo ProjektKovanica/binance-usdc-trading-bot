@@ -101,12 +101,17 @@ interface Trade {
 
 // When UI is served from Vite (:5173), use relative paths so the Vite proxy
 // forwards /api and /ws to the FastAPI backend. Direct :8000 is used only as fallback.
-const isViteDev = window.location.port === "5173" || window.location.port === "";
-const API_BASE = isViteDev
+const useRelativeApi =
+  window.location.port === "5173" ||
+  window.location.hostname.includes("kovanica") ||
+  window.location.port === "80" ||
+  window.location.port === "443" ||
+  window.location.protocol === "https:";
+const API_BASE = useRelativeApi
   ? ""
   : `http://${window.location.hostname}:8000`;
 
-const WS_URL = isViteDev
+const WS_URL = useRelativeApi
   ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`
   : `ws://${window.location.hostname}:8000/ws`;
 
@@ -131,6 +136,18 @@ export default function App() {
   const [savingRisk, setSavingRisk] = useState(false);
   const [riskMsg, setRiskMsg] = useState("");
   const [agentState, setAgentState] = useState<any>(null);
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem("trader_token"));
+  const [authUser, setAuthUser] = useState<any>(null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiSecretInput, setApiSecretInput] = useState("");
+  const [keysList, setKeysList] = useState<any[]>([]);
+  const [billing, setBilling] = useState<any>(null);
+  const [keysMsg, setKeysMsg] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -138,15 +155,15 @@ export default function App() {
       try {
         const [portfolio, curve, tradesRes, stratRes, pairsRes, newsRes] =
           await Promise.all([
-            fetch(`${API_BASE}/api/portfolio`).then((r) => r.json()),
-            fetch(`${API_BASE}/api/metrics/equity-curve?limit=500`).then((r) =>
+            apiFetch(`/api/portfolio`).then((r) => r.json()),
+            apiFetch(`/api/metrics/equity-curve?limit=500`).then((r) =>
               r.json()
             ),
-            fetch(`${API_BASE}/api/trades?limit=50`).then((r) => r.json()),
-            fetch(`${API_BASE}/api/strategies`).then((r) => r.json()),
-            fetch(`${API_BASE}/api/pairs`).then((r) => r.json()),
-            fetch(`${API_BASE}/api/news`).then((r) => r.json()),
-            fetch(`${API_BASE}/api/agent`).then((r) => r.json()).catch(() => null),
+            apiFetch(`/api/trades?limit=50`).then((r) => r.json()),
+            apiFetch(`/api/strategies`).then((r) => r.json()),
+            apiFetch(`/api/pairs`).then((r) => r.json()),
+            apiFetch(`/api/news`).then((r) => r.json()),
+            apiFetch(`/api/agent`).then((r) => r.json()).catch(() => null),
           ]);
         setState(portfolio);
         setEquityCurve(curve.points || []);
@@ -174,13 +191,24 @@ export default function App() {
     const fetchAgent = async () => {
       try {
         const [a, bt] = await Promise.all([
-          fetch(`${API_BASE}/api/agent`).then((r) => r.json()),
-          fetch(`${API_BASE}/api/backtest/run`, { method: "POST" }).then((r) => r.json()).catch(() => null),
+          apiFetch(`/api/agent`).then((r) => r.json()),
+          apiFetch(`/api/backtest/run`, { method: "POST" }).then((r) => r.json()).catch(() => null),
         ]);
         setAgentState({ ...a, last_backtest: bt });
       } catch {}
     };
     fetchAgent();
+    const loadKeysBilling = async () => {
+      try {
+        const [k, b] = await Promise.all([
+          apiFetch("/api/keys").then((r) => r.json()),
+          apiFetch("/api/billing").then((r) => r.json()),
+        ]);
+        setKeysList(k.keys || []);
+        setBilling(b);
+      } catch {}
+    };
+    loadKeysBilling();
     const agentIv = setInterval(fetchAgent, 10000);
 
     const ws = new WebSocket(WS_URL);
@@ -226,7 +254,7 @@ export default function App() {
   const toggleKillSwitch = async () => {
     if (!state) return;
     const next = !state.risk.kill_switch;
-    await fetch(`${API_BASE}/api/risk/kill-switch`, {
+    await apiFetch(`/api/risk/kill-switch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -237,7 +265,7 @@ export default function App() {
   };
 
   const toggleStrategy = async (id: string, enabled: boolean) => {
-    await fetch(`${API_BASE}/api/strategies/${id}/toggle`, {
+    await apiFetch(`/api/strategies/${id}/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
@@ -248,7 +276,7 @@ export default function App() {
   };
 
   const togglePair = async (symbol: string, active: boolean) => {
-    await fetch(`${API_BASE}/api/pairs/${symbol}/toggle`, {
+    await apiFetch(`/api/pairs/${symbol}/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active }),
@@ -258,11 +286,51 @@ export default function App() {
     );
   };
 
+  const authHeaders = (): HeadersInit =>
+    authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+  const apiFetch = (path: string, opts: RequestInit = {}) =>
+    fetch(`${API_BASE}${path}`, {
+      ...opts,
+      headers: {
+        ...(opts.headers || {}),
+        ...authHeaders(),
+      },
+    });
+
+  const doAuth = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const path = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPass }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Auth failed");
+      localStorage.setItem("trader_token", data.access_token);
+      setAuthToken(data.access_token);
+      setAuthUser(data.user);
+    } catch (e: any) {
+      setAuthError(e.message || "Auth failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem("trader_token");
+    setAuthToken(null);
+    setAuthUser(null);
+  };
+
   const saveRiskSettings = async () => {
     setSavingRisk(true);
     setRiskMsg("");
     try {
-      const res = await fetch(`${API_BASE}/api/risk`, {
+      const res = await apiFetch(`/api/risk`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -288,6 +356,55 @@ export default function App() {
       setTimeout(() => setRiskMsg(""), 3000);
     }
   };
+
+  if (!authToken) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <h1 className="text-xl font-semibold mb-1">Kovanica Trader</h1>
+          <p className="text-sm text-slate-400 mb-6">Paper trading · email only</p>
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setAuthMode("login")}
+              className={`flex-1 py-2 rounded-lg text-sm ${authMode === "login" ? "bg-emerald-600" : "bg-slate-800"}`}
+            >
+              Login
+            </button>
+            <button
+              onClick={() => setAuthMode("register")}
+              className={`flex-1 py-2 rounded-lg text-sm ${authMode === "register" ? "bg-emerald-600" : "bg-slate-800"}`}
+            >
+              Register
+            </button>
+          </div>
+          <label className="block text-xs text-slate-400 mb-1">Email</label>
+          <input
+            type="email"
+            value={authEmail}
+            onChange={(e) => setAuthEmail(e.target.value)}
+            className="w-full mb-3 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2"
+            placeholder="you@email.com"
+          />
+          <label className="block text-xs text-slate-400 mb-1">Password (min 8)</label>
+          <input
+            type="password"
+            value={authPass}
+            onChange={(e) => setAuthPass(e.target.value)}
+            className="w-full mb-4 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2"
+            placeholder="••••••••"
+          />
+          {authError && <p className="text-rose-400 text-sm mb-3">{authError}</p>}
+          <button
+            onClick={doAuth}
+            disabled={authLoading}
+            className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium disabled:opacity-50"
+          >
+            {authLoading ? "…" : authMode === "login" ? "Sign in" : "Create account"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || !state) {
     return (
@@ -328,7 +445,7 @@ export default function App() {
                   : "bg-rose-500/20 text-rose-300"
               }`}
             >
-              {state.mode.toUpperCase()}
+              {state.mode.toUpperCase()}{state.user?.email ? ` · ${state.user.email}` : (authUser?.email ? ` · ${authUser.email}` : "")}{" · "}{authUser?.email || ""}
             </span>
           </div>
           <div className="flex items-center gap-4 text-sm">
@@ -432,7 +549,13 @@ export default function App() {
                 </p>
               </div>
               <button
-                onClick={toggleKillSwitch}
+                onClick={logout}
+              className="text-xs text-slate-400 hover:text-slate-200 mr-2"
+            >
+              Logout
+            </button>
+            <button
+              onClick={toggleKillSwitch}
                 className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-all ${
                   state.risk.kill_switch
                     ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/40"
@@ -872,6 +995,124 @@ export default function App() {
             </div>
           </div>
         )}
+
+        
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 mt-4">
+              <h2 className="font-medium mb-2">Connect Binance (Phase D)</h2>
+              <p className="text-xs text-slate-400 mb-3">
+                API key encrypted at rest. Enable Futures; disable withdraw. Live orders not auto-enabled yet.
+              </p>
+              <input
+                className="w-full mb-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm"
+                placeholder="API Key"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+              />
+              <input
+                type="password"
+                className="w-full mb-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm"
+                placeholder="API Secret"
+                value={apiSecretInput}
+                onChange={(e) => setApiSecretInput(e.target.value)}
+              />
+              <button
+                className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm"
+                onClick={async () => {
+                  setKeysMsg("");
+                  const r = await apiFetch("/api/keys", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ api_key: apiKeyInput, api_secret: apiSecretInput }),
+                  });
+                  const d = await r.json();
+                  setKeysMsg(r.ok ? "Saved (encrypted)" : d.detail || "Error");
+                  setApiSecretInput("");
+                  const k = await apiFetch("/api/keys").then((x) => x.json());
+                  setKeysList(k.keys || []);
+                }}
+              >
+                Save keys
+              </button>
+              {keysMsg && <p className="text-xs text-slate-400 mt-2">{keysMsg}</p>}
+              <ul className="mt-3 text-xs text-slate-400 space-y-1">
+                {keysList.map((k) => (
+                  <li key={k.id}>{k.exchange}: {k.api_key_masked}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 mt-4">
+              <h2 className="font-medium mb-2">Billing (Phase E)</h2>
+              <p className="text-sm text-slate-300 mb-2">
+                Plan: <span className="text-emerald-400">{billing?.plan || "free"}</span>
+                {billing?.stripe_configured ? "" : " · Stripe not configured (dry-run)"}
+              </p>
+              <button
+                className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-sm"
+                onClick={async () => {
+                  try {
+                    const r = await apiFetch("/api/billing/checkout", { method: "POST" });
+                    const d = await r.json().catch(() => ({} as any));
+                    if (r.status === 429) {
+                      setKeysMsg("Too many requests — wait 30s");
+                      return;
+                    }
+                    if (d.checkout_url) {
+                      window.location.assign(d.checkout_url);
+                      return;
+                    }
+                    setKeysMsg(
+                      (typeof d.detail === "string" && d.detail) ||
+                        d.message ||
+                        (d.debug ? JSON.stringify(d.debug) : `Checkout failed (${r.status})`)
+                    );
+                  } catch (e: any) {
+                    setKeysMsg(e?.message || "Checkout network error");
+                  }
+                }}
+              >
+                Upgrade to Pro
+              </button>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 mt-4">
+              <h2 className="font-medium mb-2">Live trading</h2>
+              <p className="text-xs text-rose-400 mb-3">
+                REAL orders with your Binance keys. Pro + keys required. Server must arm LIVE_TRADING_ENABLED.
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  className="px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-600 text-sm"
+                  onClick={async () => {
+                    const r = await apiFetch("/api/live/start", { method: "POST" });
+                    const d = await r.json().catch(() => ({}));
+                    setKeysMsg(d.message || d.detail || JSON.stringify(d));
+                    const b = await apiFetch("/api/billing").then((x) => x.json());
+                    setBilling(b);
+                  }}
+                >
+                  Start LIVE
+                </button>
+                <button
+                  className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm"
+                  onClick={async () => {
+                    const r = await apiFetch("/api/live/stop", { method: "POST" });
+                    const d = await r.json().catch(() => ({}));
+                    setKeysMsg(JSON.stringify(d));
+                  }}
+                >
+                  Stop LIVE
+                </button>
+                <button
+                  className="px-4 py-2 rounded-lg bg-slate-800 text-sm"
+                  onClick={async () => {
+                    const d = await apiFetch("/api/live/status").then((x) => x.json());
+                    setKeysMsg(JSON.stringify(d));
+                  }}
+                >
+                  Live status
+                </button>
+              </div>
+            </div>
+
+            </div>
 
         {tab === "news" && (
           <div className="space-y-3">
