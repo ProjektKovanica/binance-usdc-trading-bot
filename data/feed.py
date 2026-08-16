@@ -196,7 +196,7 @@ class MarketDataFeed:
     # ──────────────────────────────────────────────
 
     async def _rest_polling_loop(self) -> None:
-        logger.info("REST polling loop started (every 20 seconds)")
+        logger.info("REST polling loop started (every 45 seconds, staggered)")
         while self._running:
             try:
                 for symbol in self.symbols:
@@ -240,8 +240,9 @@ class MarketDataFeed:
                         self._emit(EventType.TICKER, ticker)
                     except Exception as e:
                         logger.debug("REST ticker error %s: %s", symbol, e)
+                    await asyncio.sleep(0.4)  # stagger per symbol
 
-                await asyncio.sleep(20)  # poll every 20 seconds
+                await asyncio.sleep(45)  # slower poll — avoid Binance 429
             except asyncio.CancelledError:
                 break
             except Exception as e:

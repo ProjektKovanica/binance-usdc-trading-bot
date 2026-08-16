@@ -9,3 +9,5 @@ node_modules/
 dashboard/frontend/node_modules/
 .pytest_cache/
 .mypy_cache/
+config/runtime_status.json
+config/agent_memory.json

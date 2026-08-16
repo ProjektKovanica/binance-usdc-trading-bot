@@ -256,6 +256,31 @@ class RiskManager:
         else:
             self.open_positions[position.symbol] = position
 
+    def update_limits(
+        self,
+        max_daily_loss_usdc=None,
+        max_position_pct_equity=None,
+        max_leverage=None,
+        max_open_positions=None,
+    ) -> None:
+        """Hot-reload risk limits from dashboard / runtime control file."""
+        from decimal import Decimal
+        if max_daily_loss_usdc is not None:
+            self.limits.max_daily_loss_usdc = Decimal(str(max_daily_loss_usdc))
+        if max_position_pct_equity is not None:
+            self.limits.max_position_pct_equity = Decimal(str(max_position_pct_equity))
+        if max_leverage is not None:
+            self.limits.max_leverage = Decimal(str(max_leverage))
+        if max_open_positions is not None:
+            self.limits.max_open_positions = int(max_open_positions)
+        logger.info(
+            "Risk limits updated | daily_loss=%s pos_pct=%s lev=%s max_pos=%s",
+            self.limits.max_daily_loss_usdc,
+            self.limits.max_position_pct_equity,
+            self.limits.max_leverage,
+            self.limits.max_open_positions,
+        )
+
     def activate_kill_switch(self, reason: str) -> None:
         self._activate_kill_switch(reason)
 

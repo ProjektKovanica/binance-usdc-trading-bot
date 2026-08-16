@@ -1,0 +1,11 @@
+{
+  "kill_switch": false,
+  "kill_reason": "",
+  "kill_description": "Emergency stop: blocks ALL NEW orders from strategies. Open positions stay open (they are not force-closed). Use this if the bot misbehaves, losses spike, or you need a hard pause. Reset only when you are sure it is safe to resume.",
+  "max_daily_loss_usdc": 150.0,
+  "max_position_pct_equity": 0.08,
+  "max_leverage": 3,
+  "max_open_positions": 6,
+  "updated_at": "2026-08-16T07:06:28.495241+00:00",
+  "updated_by": "dashboard"
+}

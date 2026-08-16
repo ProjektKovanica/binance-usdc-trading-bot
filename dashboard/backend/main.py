@@ -5,14 +5,74 @@ FastAPI + WebSocket real-time + full control endpoints
 
 from __future__ import annotations
 
+import json
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse, HTMLResponse
 from pydantic import BaseModel
+
+# ──────────────────────────────────────────────
+# Shared runtime files (engine <-> dashboard)
+# ──────────────────────────────────────────────
+
+CONTROL_PATH = Path(__file__).resolve().parents[2] / "config" / "runtime_control.json"
+STATUS_PATH = Path(__file__).resolve().parents[2] / "config" / "runtime_status.json"
+
+KILL_SWITCH_DESCRIPTION = (
+    "Emergency stop: blocks ALL NEW orders from strategies. "
+    "Open positions stay open (they are not force-closed). "
+    "Use this if the bot misbehaves, losses spike, or you need a hard pause. "
+    "Reset only when you are sure it is safe to resume."
+)
+
+# Simple in-memory rate limiter: max N requests per IP per window
+_RATE_LIMIT = 60  # requests
+_RATE_WINDOW = 60  # seconds
+_rate_buckets: dict = defaultdict(list)
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    now = time.time()
+    bucket = _rate_buckets[client_ip]
+    # drop old
+    _rate_buckets[client_ip] = [t for t in bucket if now - t < _RATE_WINDOW]
+    if len(_rate_buckets[client_ip]) >= _RATE_LIMIT:
+        return False
+    _rate_buckets[client_ip].append(now)
+    return True
+
+
+def _write_control(**updates) -> dict:
+    data = {}
+    if CONTROL_PATH.exists():
+        try:
+            data = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    data.update(updates)
+    data["kill_description"] = KILL_SWITCH_DESCRIPTION
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    data["updated_by"] = "dashboard"
+    CONTROL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONTROL_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return data
+
+
+def _read_status() -> dict:
+    if STATUS_PATH.exists():
+        try:
+            return json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
 
 # ──────────────────────────────────────────────
 # In-memory state (injected from live engine in production)
@@ -32,6 +92,7 @@ app_state: Dict[str, Any] = {
     "risk": {
         "kill_switch": False,
         "kill_reason": "",
+        "kill_description": KILL_SWITCH_DESCRIPTION,
         "risk_utilization_pct": 0.0,
         "max_drawdown_pct": 0.0,
         "max_daily_loss_usdc": 150.0,
@@ -111,6 +172,14 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Dashboard backend started")
+    _write_control(
+        kill_switch=app_state["risk"].get("kill_switch", False),
+        kill_reason=app_state["risk"].get("kill_reason", ""),
+        max_daily_loss_usdc=app_state["risk"].get("max_daily_loss_usdc", 150),
+        max_position_pct_equity=app_state["risk"].get("max_position_pct_equity", 0.08),
+        max_leverage=app_state["risk"].get("max_leverage", 3),
+        max_open_positions=app_state["risk"].get("max_open_positions", 6),
+    )
     yield
     print("Dashboard backend stopped")
 
@@ -129,6 +198,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    # Skip rate limit for docs/health lightly, still count API
+    client = request.client.host if request.client else "unknown"
+    path = request.url.path
+    if path.startswith("/api") or path == "/ws":
+        if not _check_rate_limit(client):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Max 60 requests / minute."},
+            )
+    return await call_next(request)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,6 +255,24 @@ async def health():
 
 @app.get("/api/portfolio")
 async def get_portfolio():
+    live = _read_status()
+    if live:
+        app_state["equity"] = live.get("equity", app_state["equity"])
+        app_state["available_balance"] = live.get("available_balance", app_state["available_balance"])
+        app_state["unrealized_pnl"] = live.get("unrealized_pnl", app_state["unrealized_pnl"])
+        app_state["realized_pnl"] = live.get("realized_pnl", app_state["realized_pnl"])
+        app_state["mode"] = live.get("mode", app_state["mode"])
+        app_state["open_positions"] = live.get("open_positions", app_state["open_positions"])
+        app_state["last_update"] = live.get("updated_at", app_state["last_update"])
+        if live.get("risk"):
+            r = live["risk"]
+            app_state["risk"]["kill_switch"] = r.get("kill_switch", app_state["risk"]["kill_switch"])
+            app_state["risk"]["kill_reason"] = r.get("kill_reason", app_state["risk"].get("kill_reason", ""))
+            app_state["risk"]["risk_utilization_pct"] = r.get("risk_utilization_pct", 0)
+            app_state["risk"]["max_drawdown_pct"] = r.get("max_drawdown_pct", 0)
+            app_state["daily_pnl"] = r.get("daily_pnl", app_state["daily_pnl"])
+            app_state["weekly_pnl"] = r.get("weekly_pnl", app_state["weekly_pnl"])
+    app_state["risk"]["kill_description"] = KILL_SWITCH_DESCRIPTION
     return {
         "equity": app_state["equity"],
         "starting_equity": app_state["starting_equity"],
@@ -210,10 +312,27 @@ class KillSwitchRequest(BaseModel):
 
 @app.post("/api/risk/kill-switch")
 async def set_kill_switch(body: KillSwitchRequest):
+    reason = body.reason if body.active else ""
+    if body.active and (not reason or reason.startswith("Manual") or reason.startswith("Activated")):
+        reason = KILL_SWITCH_DESCRIPTION
     app_state["risk"]["kill_switch"] = body.active
-    app_state["risk"]["kill_reason"] = body.reason if body.active else ""
+    app_state["risk"]["kill_reason"] = reason
+    app_state["risk"]["kill_description"] = KILL_SWITCH_DESCRIPTION
+    _write_control(
+        kill_switch=body.active,
+        kill_reason=reason,
+        max_daily_loss_usdc=app_state["risk"].get("max_daily_loss_usdc"),
+        max_position_pct_equity=app_state["risk"].get("max_position_pct_equity"),
+        max_leverage=app_state["risk"].get("max_leverage"),
+        max_open_positions=app_state["risk"].get("max_open_positions"),
+    )
     await manager.broadcast({"type": "update", "data": app_state})
-    return {"ok": True, "kill_switch": body.active, "reason": body.reason}
+    return {
+        "ok": True,
+        "kill_switch": body.active,
+        "reason": reason,
+        "description": KILL_SWITCH_DESCRIPTION,
+    }
 
 
 class RiskUpdate(BaseModel):
@@ -228,6 +347,14 @@ async def update_risk(body: RiskUpdate):
     for k, v in body.model_dump(exclude_none=True).items():
         if k in app_state["risk"]:
             app_state["risk"][k] = v
+    _write_control(
+        kill_switch=app_state["risk"].get("kill_switch", False),
+        kill_reason=app_state["risk"].get("kill_reason", ""),
+        max_daily_loss_usdc=app_state["risk"].get("max_daily_loss_usdc"),
+        max_position_pct_equity=app_state["risk"].get("max_position_pct_equity"),
+        max_leverage=app_state["risk"].get("max_leverage"),
+        max_open_positions=app_state["risk"].get("max_open_positions"),
+    )
     await manager.broadcast({"type": "update", "data": app_state})
     return {"ok": True, "risk": app_state["risk"]}
 
@@ -314,16 +441,85 @@ async def get_news():
     }
 
 
+
+
+@app.get("/api/agent")
+async def get_agent_state():
+    """Agent memory, regimes, health, smart scoreboard from live engine status."""
+    live = _read_status()
+    agent = live.get("agent") or {}
+    smart = agent.get("smart") or {}
+    mem_path = Path(__file__).resolve().parents[2] / "config" / "agent_memory.json"
+    memory = agent.get("memory")
+    if not memory and mem_path.exists():
+        try:
+            raw = json.loads(mem_path.read_text(encoding="utf-8"))
+            memory = {"events": len(raw.get("events", [])), "raw_tail": raw.get("events", [])[-10:]}
+        except Exception:
+            memory = {}
+    return {
+        "memory": memory,
+        "regimes": agent.get("regimes", smart.get("regimes", {})),
+        "health": agent.get("health", {}),
+        "smart": smart,
+        "scoreboard": smart.get("scoreboard", {}),
+        "session": smart.get("session"),
+        "adaptive_mult_hint": agent.get("adaptive_mult_hint"),
+        "updated_at": live.get("updated_at"),
+    }
+
+
+@app.post("/api/agent/strategy/{strategy_id}/enable")
+async def agent_enable_strategy(strategy_id: str):
+    """Clear auto-disable flag in control file for engine to pick up."""
+    _write_control(reenable_strategy=strategy_id)
+    return {"ok": True, "strategy_id": strategy_id, "action": "reenable"}
+
+
+@app.get("/api/backtest/info")
+async def backtest_info():
+    return {
+        "available": True,
+        "note": "Run scripts/run_backtest.py on VPS for full offline backtest",
+        "walk_forward": True,
+        "metrics": ["sharpe", "sortino", "max_dd", "profit_factor", "win_rate"],
+    }
+
+
+@app.post("/api/backtest/run")
+async def backtest_run():
+    """Lightweight placeholder — full BT is CPU heavy; returns last metrics file if any."""
+    metrics_path = Path(__file__).resolve().parents[2] / "config" / "last_backtest.json"
+    if metrics_path.exists():
+        try:
+            return json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "ok": False,
+        "message": "No cached backtest. SSH: python scripts/run_backtest.py",
+        "hint": "Walk-forward: python -c 'from backtest.walk_forward import *; ...'",
+    }
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         await ws.send_json({"type": "snapshot", "data": app_state})
         while True:
-            data = await ws.receive_json()
-            if data.get("action") == "ping":
+            try:
+                data = await ws.receive_json()
+            except Exception:
+                # non-JSON messages / empty frames
+                data = {}
+            if isinstance(data, dict) and data.get("action") == "ping":
                 await ws.send_json({"type": "pong"})
+                continue
+            # keep connection alive; ignore unknown client messages
     except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
         manager.disconnect(ws)
 
 
