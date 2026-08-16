@@ -1,0 +1,112 @@
+# ──────────────────────────────────────────────
+# Main Bot Configuration
+# ──────────────────────────────────────────────
+
+mode: paper                    # paper | live
+starting_capital_usdc: 10000   # paper capital
+min_live_capital_usdc: 10      # hard floor for live
+
+exchange:
+  id: binance
+  sandbox: false               # true = testnet (recommended first)
+  default_type: future         # spot | future (USDC-M)
+  settle: USDC                 # we trade only USDC pairs
+  rate_limit: true
+  enable_rate_limit: true
+  options:
+    defaultType: future
+    adjustForTimeDifference: true
+    recvWindow: 10000
+
+# Allowed symbols (USDC only)
+symbols:
+  - BTCUSDC
+  - ETHUSDC
+  - SOLUSDC
+  - XRPUSDC
+  - DOGEUSDC
+  - AVAXUSDC
+  - LINKUSDC
+  - BNBUSDC
+
+# Timeframes the bot will subscribe to
+timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  - 4h
+
+# ──────────────────────────────────────────────
+# Risk (global defaults – can be overridden per strategy)
+# ──────────────────────────────────────────────
+risk:
+  max_position_size_usdc: 2000
+  max_position_pct_equity: 0.08
+  max_daily_loss_usdc: 150
+  max_daily_loss_pct: 0.015
+  max_weekly_loss_usdc: 400
+  max_drawdown_pct: 0.07
+  max_leverage: 3
+  max_open_positions: 6
+  max_correlated_exposure_pct: 0.20
+  min_risk_reward: 1.8
+  position_sizing: atr          # fixed | pct_equity | atr | kelly
+  atr_period: 14
+  atr_multiplier: 1.5
+  kelly_fraction_cap: 0.25      # never risk more than 25% of Kelly
+  kill_switch_enabled: true
+  auto_kill_on_daily_loss: true
+  auto_kill_on_max_dd: true
+
+# ──────────────────────────────────────────────
+# Execution
+# ──────────────────────────────────────────────
+execution:
+  default_order_type: market
+  max_slippage_pct: 0.0015      # 0.15%
+  retry_attempts: 3
+  retry_delay_ms: 400
+  partial_fill_timeout_sec: 30
+  heartbeat_interval_sec: 15
+  reconnect_max_attempts: 10
+  use_post_only_when_possible: false
+
+# ──────────────────────────────────────────────
+# Logging & Monitoring
+# ──────────────────────────────────────────────
+logging:
+  level: INFO
+  json: true
+  file: logs/bot.log
+  max_bytes: 50485760
+  backup_count: 10
+
+alerts:
+  enabled: true
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  discord:
+    enabled: false
+    webhook_url: ""
+
+# ──────────────────────────────────────────────
+# Dashboard
+# ──────────────────────────────────────────────
+dashboard:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+  jwt_secret: "CHANGE_ME_IN_PRODUCTION_USE_ENV"
+  jwt_expire_minutes: 1440
+
+# ──────────────────────────────────────────────
+# Persistence
+# ──────────────────────────────────────────────
+database:
+  url: "sqlite+aiosqlite:///./data/bot.db"
+  echo: false
